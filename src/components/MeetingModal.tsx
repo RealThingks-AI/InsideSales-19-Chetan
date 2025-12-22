@@ -315,6 +315,7 @@ export const MeetingModal = ({
   // State for date/time selection
   const [timezone, setTimezone] = useState(getBrowserTimezone);
   const [tzPopoverOpen, setTzPopoverOpen] = useState(false);
+  const [tzTooltipOpen, setTzTooltipOpen] = useState(false);
   const tzListRef = useRef<HTMLDivElement | null>(null);
   const [datePopoverOpen, setDatePopoverOpen] = useState(false);
   const [timePopoverOpen, setTimePopoverOpen] = useState(false);
@@ -807,12 +808,23 @@ export const MeetingModal = ({
           <div className="grid grid-cols-4 gap-2">
             <div className="space-y-1.5">
               <Label className="text-xs font-medium">Timezone</Label>
-              <TooltipProvider delayDuration={500}>
-                <Popover open={tzPopoverOpen} onOpenChange={setTzPopoverOpen}>
-                  <Tooltip delayDuration={500}>
+              <TooltipProvider>
+                <Popover open={tzPopoverOpen} onOpenChange={open => {
+                  setTzPopoverOpen(open);
+                  if (open) setTzTooltipOpen(false);
+                }}>
+                  <Tooltip open={!tzPopoverOpen && tzTooltipOpen}>
                     <TooltipTrigger asChild>
                       <PopoverTrigger asChild>
-                        <Button variant="outline" className="w-full h-8 justify-start text-left font-normal text-xs gap-1.5">
+                        <Button
+                          variant="outline"
+                          className="w-full h-8 justify-start text-left font-normal text-xs gap-1.5"
+                          onMouseEnter={() => setTzTooltipOpen(true)}
+                          onMouseLeave={() => setTzTooltipOpen(false)}
+                          onFocus={() => setTzTooltipOpen(false)}
+                          onBlur={() => setTzTooltipOpen(false)}
+                          onClick={() => setTzTooltipOpen(false)}
+                        >
                           <span className="truncate">{selectedTimezone?.short || timezone}</span>
                         </Button>
                       </PopoverTrigger>
