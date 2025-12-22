@@ -1,94 +1,158 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Users, TrendingUp, DollarSign, Activity } from "lucide-react";
+import YearlyRevenueSummary from "@/components/YearlyRevenueSummary";
+import UserDashboard from "@/components/dashboard/UserDashboard";
+import { useUserRole } from "@/hooks/useUserRole";
+import { Skeleton } from "@/components/ui/skeleton";
+import { NotificationBell } from "@/components/NotificationBell";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useState, useEffect } from "react";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { BarChart3, LayoutDashboard } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+
+type DashboardView = "analytics" | "overview";
 
 const Dashboard = () => {
-  const stats = [
-    {
-      title: "Total Customers",
-      value: "2,543",
-      change: "+12%",
-      icon: Users,
-      color: "text-primary",
-    },
-    {
-      title: "Active Deals",
-      value: "87",
-      change: "+8%",
-      icon: TrendingUp,
-      color: "text-success",
-    },
-    {
-      title: "Revenue",
-      value: "$124,500",
-      change: "+23%",
-      icon: DollarSign,
-      color: "text-warning",
-    },
-    {
-      title: "Activities",
-      value: "342",
-      change: "+5%",
-      icon: Activity,
-      color: "text-accent",
-    },
-  ];
+  const { isAdmin, loading } = useUserRole();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  
+  const availableYears = [2020, 2021, 2022, 2023, 2024, 2025, 2026, 2027, 2028, 2029, 2030];
+  const currentYear = new Date().getFullYear();
+  const defaultYear = availableYears.includes(currentYear) ? currentYear : 2025;
+  const [selectedYear, setSelectedYear] = useState(defaultYear);
 
-  const recentDeals = [
-    { company: "Acme Corp", value: "$50,000", stage: "Negotiation", contact: "John Doe" },
-    { company: "TechStart", value: "$25,000", stage: "Proposal", contact: "Jane Smith" },
-    { company: "Global Inc", value: "$75,000", stage: "Qualified", contact: "Mike Johnson" },
-  ];
+  // Fetch admin's dashboard preference
+  const { data: dashboardPreference, isLoading: prefLoading } = useQuery({
+    queryKey: ['dashboard-preference', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return null;
+      const { data, error } = await supabase
+        .from('dashboard_preferences')
+        .select('layout_view')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      if (error) throw error;
+      return (data?.layout_view as DashboardView) || 'overview';
+    },
+    enabled: !!user?.id && isAdmin,
+  });
 
+  const [currentView, setCurrentView] = useState<DashboardView>("overview");
+
+  // Update local state when preference is loaded
+  useEffect(() => {
+    if (dashboardPreference) {
+      setCurrentView(dashboardPreference);
+    }
+  }, [dashboardPreference]);
+
+  // Mutation to save dashboard preference
+  const savePreferenceMutation = useMutation({
+    mutationFn: async (view: DashboardView) => {
+      if (!user?.id) return;
+      const { error } = await supabase
+        .from('dashboard_preferences')
+        .upsert({
+          user_id: user.id,
+          layout_view: view,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'user_id' });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dashboard-preference', user?.id] });
+    },
+  });
+
+  const handleViewChange = (value: string) => {
+    if (value && (value === "analytics" || value === "overview")) {
+      setCurrentView(value);
+      savePreferenceMutation.mutate(value);
+    }
+  };
+
+  if (loading || (isAdmin && prefLoading)) {
+    return (
+      <div className="p-6 space-y-6">
+        <Skeleton className="h-8 w-64" />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-32" />)}
+        </div>
+      </div>
+    );
+  }
+
+  // Non-admin users only see UserDashboard
+  if (!isAdmin) {
+    return <UserDashboard />;
+  }
+
+  // Admin users can toggle between views
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold text-foreground">Dashboard</h1>
-        <p className="text-muted-foreground mt-1">Welcome back! Here's what's happening today.</p>
-      </div>
-
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {stats.map((stat) => (
-          <Card key={stat.title} className="border-border">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                {stat.title}
-              </CardTitle>
-              <stat.icon className={`w-4 h-4 ${stat.color}`} />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-foreground">{stat.value}</div>
-              <p className="text-xs text-success mt-1">{stat.change} from last month</p>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {/* Recent Deals */}
-      <Card className="border-border">
-        <CardHeader>
-          <CardTitle className="text-foreground">Recent Deals</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            {recentDeals.map((deal, index) => (
-              <div
-                key={index}
-                className="flex items-center justify-between p-4 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors"
+    <div className="h-screen flex flex-col bg-background overflow-hidden">
+      {/* Fixed Header */}
+      <div className="flex-shrink-0 bg-background">
+        <div className="px-6 h-16 flex items-center border-b w-full">
+          <div className="flex items-center justify-between w-full">
+            <div className="flex items-center gap-4">
+              <ToggleGroup 
+                type="single" 
+                value={currentView} 
+                onValueChange={handleViewChange}
+                className="bg-muted/60 border border-border rounded-lg p-1"
               >
-                <div>
-                  <h3 className="font-semibold text-foreground">{deal.company}</h3>
-                  <p className="text-sm text-muted-foreground">{deal.contact}</p>
-                </div>
-                <div className="text-right">
-                  <p className="font-semibold text-foreground">{deal.value}</p>
-                  <p className="text-sm text-muted-foreground">{deal.stage}</p>
-                </div>
-              </div>
-            ))}
+                <ToggleGroupItem 
+                  value="overview" 
+                  aria-label="Dashboard Overview"
+                  className="px-3 py-1.5 text-sm data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:shadow-sm data-[state=off]:text-muted-foreground"
+                >
+                  <LayoutDashboard className="w-4 h-4 mr-2" />
+                  Dashboard
+                </ToggleGroupItem>
+                <ToggleGroupItem 
+                  value="analytics" 
+                  aria-label="Revenue Analytics"
+                  className="px-3 py-1.5 text-sm data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:shadow-sm data-[state=off]:text-muted-foreground"
+                >
+                  <BarChart3 className="w-4 h-4 mr-2" />
+                  Revenue Analytics
+                </ToggleGroupItem>
+              </ToggleGroup>
+            </div>
+            <div className="flex items-center gap-4">
+              <NotificationBell placement="down" size="small" />
+              {currentView === "analytics" && (
+                <Select value={selectedYear.toString()} onValueChange={value => setSelectedYear(parseInt(value))}>
+                  <SelectTrigger className="w-32">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableYears.map(year => (
+                      <SelectItem key={year} value={year.toString()}>
+                        {year}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex-1 min-h-0 overflow-auto">
+        {currentView === "analytics" ? (
+          <div className="p-6 space-y-8">
+            <YearlyRevenueSummary selectedYear={selectedYear} />
+            <div className="border-t border-border" />
+          </div>
+        ) : (
+          <UserDashboard />
+        )}
+      </div>
     </div>
   );
 };
