@@ -972,33 +972,20 @@ export const MeetingModal = ({
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs font-medium">End *</Label>
-              <Popover open={endTimePopoverOpen} onOpenChange={setEndTimePopoverOpen}>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-full h-8 justify-start text-left font-normal text-xs">
-                    {formatDisplayTime(endTime)}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-28 p-1 z-50 max-h-48 overflow-y-auto" align="start">
-                  {TIME_SLOTS.map(slot => <Button key={slot} variant={endTime === slot ? "secondary" : "ghost"} className="w-full justify-start text-xs h-7" onClick={() => {
-                  handleEndTimeChange(slot);
-                  setEndTimePopoverOpen(false);
-                }}>
-                        {formatDisplayTime(slot)}
-                      </Button>)}
-                </PopoverContent>
-              </Popover>
+              <Label className="text-xs font-medium">Duration *</Label>
+              <Select value={duration} onValueChange={handleDurationChange}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder="Select duration" />
+                </SelectTrigger>
+                <SelectContent>
+                  {DURATION_OPTIONS.map(option => (
+                    <SelectItem key={option.value} value={option.value} className="text-xs">
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-          </div>
-
-          {/* Auto-calculated Duration Display */}
-          <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 px-2 py-1.5 rounded">
-            <span className="font-medium">Duration:</span>
-            <span>{parseInt(duration) >= 60 
-              ? `${Math.floor(parseInt(duration) / 60)}h${parseInt(duration) % 60 > 0 ? ` ${parseInt(duration) % 60}m` : ''}`
-              : `${duration}m`
-            }</span>
-            {durationMode === 'endTime' && <span className="text-xs text-primary">(auto-calculated)</span>}
           </div>
 
           {/* Conflict Warning */}
