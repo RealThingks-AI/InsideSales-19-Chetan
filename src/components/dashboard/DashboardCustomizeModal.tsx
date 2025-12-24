@@ -232,7 +232,7 @@ export const DashboardCustomizeModal = ({
                               value={widget.size}
                               onValueChange={(value: WidgetSize) => changeSize(widget.key, value)}
                             >
-                            <SelectTrigger className={`w-[90px] h-8 text-xs font-medium ${getSizeColor(widget.size)}`}>
+                            <SelectTrigger className={`w-[110px] h-8 text-xs font-medium ${getSizeColor(widget.size)}`}>
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent className="bg-popover border shadow-lg">
