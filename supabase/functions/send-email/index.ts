@@ -236,7 +236,21 @@ const handler = async (req: Request): Promise<Response> => {
       );
     }
 
-    console.log(`Processing email request from ${from} to: ${to}${attachments?.length ? ` with ${attachments.length} attachment(s)` : ''}`);
+    // Validate email format - catch invalid emails before sending
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const cleanedTo = to.trim();
+    if (!emailRegex.test(cleanedTo)) {
+      console.error(`Invalid email format detected: ${to}`);
+      return new Response(
+        JSON.stringify({ error: `Invalid email address format: ${to}. Please check for spaces or invalid characters.` }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        }
+      );
+    }
+
+    console.log(`Processing email request from ${from} to: ${cleanedTo}${attachments?.length ? ` with ${attachments.length} attachment(s)` : ''}`);
 
     // Create Supabase client for storing email history
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -296,26 +310,46 @@ const handler = async (req: Request): Promise<Response> => {
     await sendEmail(accessToken, { to, subject, body, toName, from, attachments }, emailRecord.id);
 
     // Fetch the sent message to get its Message-ID for reply tracking
+    // Use improved logic with retries and no problematic filter
     let messageId: string | null = null;
-    try {
-      // Wait a moment for the message to appear in Sent Items
-      await new Promise(resolve => setTimeout(resolve, 1000));
+    let retries = 0;
+    const maxRetries = 3;
+
+    while (!messageId && retries < maxRetries) {
+      // Increase delay with each retry (1.5s, 3s, 4.5s)
+      await new Promise(resolve => setTimeout(resolve, 1500 * (retries + 1)));
+      retries++;
       
-      const sentItemsUrl = `https://graph.microsoft.com/v1.0/users/${from}/mailFolders/SentItems/messages?$top=1&$orderby=sentDateTime desc&$select=internetMessageId,subject&$filter=subject eq '${encodeURIComponent(subject.replace(/'/g, "''"))}'`;
-      
-      const sentResponse = await fetch(sentItemsUrl, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      
-      if (sentResponse.ok) {
-        const sentData = await sentResponse.json();
-        if (sentData.value && sentData.value.length > 0) {
-          messageId = sentData.value[0].internetMessageId;
-          console.log(`Captured Message-ID: ${messageId}`);
+      try {
+        // Fetch most recent sent emails WITHOUT filter (more reliable)
+        const sentItemsUrl = `https://graph.microsoft.com/v1.0/users/${from}/mailFolders/SentItems/messages?$top=5&$orderby=sentDateTime desc&$select=internetMessageId,subject,sentDateTime`;
+        
+        const sentResponse = await fetch(sentItemsUrl, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        
+        if (sentResponse.ok) {
+          const sentData = await sentResponse.json();
+          // Find matching email by subject (sent in last 30 seconds)
+          for (const msg of sentData.value || []) {
+            const msgTime = new Date(msg.sentDateTime);
+            const timeDiff = Date.now() - msgTime.getTime();
+            if (msg.subject === subject && timeDiff < 30000) {
+              messageId = msg.internetMessageId;
+              console.log(`Captured Message-ID on attempt ${retries}: ${messageId}`);
+              break;
+            }
+          }
+        } else {
+          console.warn(`Failed to fetch sent items (attempt ${retries}): ${sentResponse.status}`);
         }
+      } catch (msgIdError) {
+        console.warn(`Failed to capture Message-ID (attempt ${retries}):`, msgIdError);
       }
-    } catch (msgIdError) {
-      console.warn("Failed to capture Message-ID:", msgIdError);
+    }
+
+    if (!messageId) {
+      console.warn(`Could not capture Message-ID for email to ${cleanedTo} after ${maxRetries} attempts`);
     }
 
     // Update email history to mark as sent with Message-ID
@@ -328,7 +362,7 @@ const handler = async (req: Request): Promise<Response> => {
       })
       .eq("id", emailRecord.id);
 
-    console.log(`Email marked as sent for record: ${emailRecord.id}${messageId ? ' with Message-ID' : ''}`);
+    console.log(`Email marked as sent for record: ${emailRecord.id}${messageId ? ` with Message-ID: ${messageId}` : ' (no Message-ID captured)'}`);
 
     // Queue a bounce check for 45 seconds from now (auto bounce detection)
     const checkAfter = new Date(Date.now() + 45000).toISOString();
