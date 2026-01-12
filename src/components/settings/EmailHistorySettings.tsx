@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -38,6 +39,15 @@ interface EmailHistoryRecord {
   reply_count: number | null;
   replied_at: string | null;
   last_reply_at: string | null;
+}
+
+interface EmailReply {
+  id: string;
+  from_email: string;
+  from_name: string | null;
+  received_at: string;
+  body_preview: string | null;
+  subject: string | null;
 }
 
 const ITEMS_PER_PAGE = 10;
@@ -121,12 +131,15 @@ const EmailHistorySettings = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedEmail, setSelectedEmail] = useState<EmailHistoryRecord | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [retryingEmailId, setRetryingEmailId] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<string>("all");
   const [isSyncingBounces, setIsSyncingBounces] = useState(false);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
+  const [replies, setReplies] = useState<EmailReply[]>([]);
+  const [loadingReplies, setLoadingReplies] = useState(false);
 
   useEffect(() => {
     fetchEmailHistory();
@@ -172,7 +185,30 @@ const EmailHistorySettings = () => {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, filterType, dateRange]);
+  }, [searchQuery, filterType, dateRange, statusFilter]);
+
+  // Fetch replies when an email is selected
+  useEffect(() => {
+    if (selectedEmail && (selectedEmail.reply_count || 0) > 0) {
+      setLoadingReplies(true);
+      supabase
+        .from('email_replies')
+        .select('id, from_email, from_name, received_at, body_preview, subject')
+        .eq('email_history_id', selectedEmail.id)
+        .order('received_at', { ascending: false })
+        .then(({ data, error }) => {
+          if (error) {
+            console.error('Error fetching replies:', error);
+            setReplies([]);
+          } else {
+            setReplies((data as EmailReply[]) || []);
+          }
+          setLoadingReplies(false);
+        });
+    } else {
+      setReplies([]);
+    }
+  }, [selectedEmail]);
 
   const fetchEmailHistory = async () => {
     if (!user) return;
@@ -311,6 +347,20 @@ const EmailHistorySettings = () => {
     const status = email.status;
     const bounceType = email.bounce_type;
     const isValidOpen = email.is_valid_open;
+    const replyCount = email.reply_count;
+
+    // Show "Verifying..." for emails sent within the last 60 seconds
+    const sentAt = new Date(email.sent_at);
+    const isRecentlySent = Date.now() - sentAt.getTime() < 60000; // 60 seconds
+
+    if (status === 'sent' && isRecentlySent && !bounceType) {
+      return (
+        <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 flex items-center gap-1">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          Verifying...
+        </Badge>
+      );
+    }
 
     // Bounced takes priority - use user-friendly messaging
     if (bounceType || status === 'bounced') {
@@ -340,6 +390,16 @@ const EmailHistorySettings = () => {
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
+      );
+    }
+
+    // Show replied status if there are replies
+    if (status === 'replied' || (replyCount && replyCount > 0)) {
+      return (
+        <Badge className="bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400 flex items-center gap-1">
+          <Reply className="w-3 h-3" />
+          Replied {replyCount && replyCount > 1 ? `(${replyCount})` : ''}
+        </Badge>
       );
     }
 
@@ -427,8 +487,20 @@ const EmailHistorySettings = () => {
     if (filterType === "contact") matchesType = !!email.contact_id;
     else if (filterType === "lead") matchesType = !!email.lead_id;
     else if (filterType === "account") matchesType = !!email.account_id;
+
+    // Status filter
+    let matchesStatus = true;
+    if (statusFilter !== "all") {
+      if (statusFilter === "bounced") {
+        matchesStatus = !!email.bounce_type || email.status === 'bounced';
+      } else if (statusFilter === "replied") {
+        matchesStatus = email.status === 'replied' || (email.reply_count || 0) > 0;
+      } else {
+        matchesStatus = email.status === statusFilter;
+      }
+    }
     
-    return matchesSearch && matchesDate && matchesType;
+    return matchesSearch && matchesDate && matchesType && matchesStatus;
   });
 
   // Pagination calculations
@@ -440,15 +512,17 @@ const EmailHistorySettings = () => {
   // Calculate stats excluding bounced emails for open rate
   const nonBouncedEmails = emails.filter(e => !e.bounce_type && e.status !== 'bounced');
   const validOpens = nonBouncedEmails.filter(e => (e.unique_opens || e.open_count || 0) > 0 && e.is_valid_open !== false);
+  const repliedEmails = emails.filter(e => e.status === 'replied' || (e.reply_count || 0) > 0);
   const stats = {
     total: emails.length,
     bounced: emails.filter(e => e.bounce_type || e.status === 'bounced').length,
     opened: validOpens.length,
+    replied: repliedEmails.length,
     openRate: nonBouncedEmails.length > 0 ? Math.round((validOpens.length / nonBouncedEmails.length) * 100) : 0,
   };
 
   const handleExportCSV = () => {
-    const headers = ["Recipient Name", "Recipient Email", "Subject", "Sent At", "Status", "Unique Opens", "Total Opens", "Valid Open", "Bounce Type", "Bounce Reason", "Type"];
+    const headers = ["Recipient Name", "Recipient Email", "Subject", "Sent At", "Status", "Unique Opens", "Total Opens", "Valid Open", "Replies", "Bounce Type", "Bounce Reason", "Type"];
     const rows = filteredEmails.map(email => [
       email.recipient_name || "Unknown",
       email.recipient_email,
@@ -458,6 +532,7 @@ const EmailHistorySettings = () => {
       email.unique_opens || 0,
       email.open_count || 0,
       email.is_valid_open !== false ? "Yes" : "No",
+      email.reply_count || 0,
       email.bounce_type || "",
       email.bounce_reason || "",
       getEntityType(email)
@@ -485,7 +560,7 @@ const EmailHistorySettings = () => {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <Card>
           <CardContent className="pt-3 pb-3">
             <div className="flex items-center gap-2">
@@ -511,6 +586,15 @@ const EmailHistorySettings = () => {
               <span className="text-sm text-muted-foreground">Opened</span>
             </div>
             <p className="text-xl font-bold mt-1">{stats.opened}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-3 pb-3">
+            <div className="flex items-center gap-2">
+              <Reply className="h-4 w-4 text-purple-500" />
+              <span className="text-sm text-muted-foreground">Replied</span>
+            </div>
+            <p className="text-xl font-bold mt-1 text-purple-600">{stats.replied}</p>
           </CardContent>
         </Card>
         <Card>
@@ -557,6 +641,18 @@ const EmailHistorySettings = () => {
             <SelectItem value="contact">Contacts</SelectItem>
             <SelectItem value="lead">Leads</SelectItem>
             <SelectItem value="account">Accounts</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="w-full sm:w-[130px]">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Status</SelectItem>
+            <SelectItem value="sent">Sent</SelectItem>
+            <SelectItem value="opened">Opened</SelectItem>
+            <SelectItem value="bounced">Bounced</SelectItem>
+            <SelectItem value="replied">Replied</SelectItem>
           </SelectContent>
         </Select>
         <div className="flex gap-2">
@@ -622,6 +718,7 @@ const EmailHistorySettings = () => {
                       <TableHead>Sent At</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead className="text-center">Opens</TableHead>
+                      <TableHead className="text-center">Replies</TableHead>
                       <TableHead className="w-[60px]"></TableHead>
                     </TableRow>
                   </TableHeader>
@@ -659,6 +756,16 @@ const EmailHistorySettings = () => {
                           </TableCell>
                           <TableCell className="text-center">
                             {getOpensDisplay(email)}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {email.reply_count && email.reply_count > 0 ? (
+                              <Badge variant="secondary" className="text-xs">
+                                <Reply className="w-3 h-3 mr-1" />
+                                {email.reply_count}
+                              </Badge>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
                           </TableCell>
                           <TableCell>
                             {(email.status === 'failed' || email.bounce_type) && (
@@ -843,6 +950,38 @@ const EmailHistorySettings = () => {
                   </div>
                 );
               })()}
+
+              {/* Replies Section */}
+              {(selectedEmail.reply_count || 0) > 0 && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Reply className="h-4 w-4 text-purple-500" />
+                    <span className="font-medium">Replies ({selectedEmail.reply_count})</span>
+                  </div>
+                  {loadingReplies ? (
+                    <div className="space-y-2">
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                    </div>
+                  ) : replies.length > 0 ? (
+                    <div className="space-y-2 max-h-[200px] overflow-y-auto">
+                      {replies.map(reply => (
+                        <div key={reply.id} className="p-3 bg-purple-50/50 dark:bg-purple-900/10 rounded-lg border">
+                          <div className="flex justify-between items-start mb-1">
+                            <span className="font-medium text-sm">{reply.from_name || reply.from_email}</span>
+                            <span className="text-xs text-muted-foreground">
+                              {format(new Date(reply.received_at), 'MMM d, yyyy HH:mm')}
+                            </span>
+                          </div>
+                          <p className="text-sm text-muted-foreground">{reply.body_preview || 'No preview available'}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Replies detected but details not available yet.</p>
+                  )}
+                </div>
+              )}
 
               {/* Suspicious open warning */}
               {selectedEmail.status === 'opened' && selectedEmail.is_valid_open === false && !selectedEmail.bounce_type && (
